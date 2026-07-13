@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Dépenses" />
+<meta name="theme-color" content="#10192B" />
+<title>Journal des dépenses</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2310192B'/%3E%3Ctext x='50' y='68' font-size='55' text-anchor='middle' fill='%23C9A227' font-family='serif'%3E%E2%82%AB%3C/text%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%2310192B'/%3E%3Ctext x='50' y='68' font-size='55' text-anchor='middle' fill='%23C9A227' font-family='serif'%3E%E2%82%AB%3C/text%3E%3C/svg%3E" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js" crossorigin></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #10192B; }
+  body { -webkit-tap-highlight-color: transparent; }
+  .ej-scroll::-webkit-scrollbar { display: none; }
+  .ej-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+  input { -webkit-appearance: none; }
+  .app-shell { max-width: 480px; margin: 0 auto; padding: 24px 16px 48px; }
+  @media (min-width: 768px) {
+    body { display: flex; justify-content: center; }
+    .app-shell {
+      max-width: 640px;
+      margin: 40px auto;
+      padding: 36px 40px 48px;
+      background: #131f36;
+      border-radius: 20px;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+      min-height: calc(100vh - 80px);
+    }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } = Recharts;
+
+/* ---------- identifiant du projet Google Cloud (à remplacer, voir instructions) ---------- */
+const GOOGLE_CLIENT_ID = "REMPLACE_MOI.apps.googleusercontent.com";
+
+/* ---------- cache local (lecture rapide + secours hors-ligne) ---------- */
+const cache = {
+  get() {
+    try {
+      const raw = localStorage.getItem("journal-depenses:cache");
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  },
+  set(value) {
+    try { localStorage.setItem("journal-depenses:cache", JSON.stringify(value)); } catch (e) {}
+  },
+};
+
+/* ---------- Google Drive (le fichier de données vit dans le Drive de l'utilisateur) ---------- */
+const DRIVE_FILE_NAME = "journal-depenses-data.json";
+
+async function driveFindFileId(token) {
+  const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("drive-list-failed");
+  const data = await res.json();
+  return data.files && data.files.length ? data.files[0].id : null;
+}
+
+async function driveReadFile(token, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("drive-read-failed");
+  return res.json();
+}
+
+async function driveCreateFile(token, content) {
+  const metadata = { name: DRIVE_FILE_NAME, mimeType: "application/json" };
+  const boundary = "-------jd" + Date.now();
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(content)}\r\n` +
+    `--${boundary}--`;
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  if (!res.ok) throw new Error("drive-create-failed");
+  const data = await res.json();
+  return data.id;
+}
+
+async function driveUpdateFile(token, fileId, content) {
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(content),
+  });
+  if (!res.ok) throw new Error("drive-update-failed");
+}
+
+/* ---------- icônes minimalistes (pas de dépendance externe) ---------- */
+function Icon({ path, size = 16, color = "currentColor", strokeWidth = 2 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      {path}
+    </svg>
+  );
+}
+const ShoppingCart = (p) => <Icon {...p} path={<><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></>} />;
+const Car = (p) => <Icon {...p} path={<><path d="M5 17h14M5 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm14 0a2 2 0 1 0 4 0 2 2 0 0 0-4 0zM3 17V9l2-5h14l2 5v8"/></>} />;
+const Home = (p) => <Icon {...p} path={<><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></>} />;
+const HeartPulse = (p) => <Icon {...p} path={<><path d="M19 14c1.5-1.7 3-3.5 3-5.7A4.3 4.3 0 0 0 17.7 4c-1.6 0-2.9.8-3.7 2-.8-1.2-2.1-2-3.7-2A4.3 4.3 0 0 0 6 8.3c0 .3 0 .6.1.9H4l-1.5 3H6l2-4 3 8 2.5-5H15"/></>} />;
+const Popcorn = (p) => <Icon {...p} path={<><path d="M7 9h10l-1 12H8L7 9z"/><path d="M6 9a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 4.5-1.5A2.5 2.5 0 0 1 15 3.5 2.5 2.5 0 0 1 18 9"/></>} />;
+const Repeat = (p) => <Icon {...p} path={<><path d="m17 2 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></>} />;
+const MoreHorizontal = (p) => <Icon {...p} path={<><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></>} />;
+const ChevronLeft = (p) => <Icon {...p} path={<path d="m15 18-6-6 6-6"/>} />;
+const ChevronRight = (p) => <Icon {...p} path={<path d="m9 18 6-6-6-6"/>} />;
+const Trash2 = (p) => <Icon {...p} path={<><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></>} />;
+const TrendingUp = (p) => <Icon {...p} path={<><path d="m3 17 6-6 4 4 8-8"/><path d="M17 7h4v4"/></>} />;
+const TrendingDown = (p) => <Icon {...p} path={<><path d="m3 7 6 6 4-4 8 8"/><path d="M17 17h4v-4"/></>} />;
+const Plus = (p) => <Icon {...p} path={<><path d="M12 5v14M5 12h14"/></>} />;
+const Pause = (p) => <Icon {...p} path={<><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></>} />;
+const RotateCcw = (p) => <Icon {...p} path={<><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></>} />;
+const Check = (p) => <Icon {...p} path={<path d="M20 6 9 17l-5-5"/>} />;
+
+const CATEGORIES = [
+  { id: "alimentation", label: "Alimentation", color: "#B5544A", icon: ShoppingCart },
+  { id: "transport", label: "Transport", color: "#5B7DB1", icon: Car },
+  { id: "logement", label: "Logement", color: "#7A9471", icon: Home },
+  { id: "sante", label: "Santé", color: "#C9A227", icon: HeartPulse },
+  { id: "loisirs", label: "Loisirs", color: "#8B6F47", icon: Popcorn },
+  { id: "abonnements", label: "Abonnements", color: "#6B7280", icon: Repeat },
+  { id: "autres", label: "Autres", color: "#9CA3AF", icon: MoreHorizontal },
+];
+
+const FIXED_SUGGESTIONS = [
+  { label: "Servante", category: "autres" },
+  { label: "Poche", category: "autres" },
+  { label: "Internet (mois)", category: "abonnements" },
+  { label: "Internet Dokui", category: "abonnements" },
+  { label: "CIE", category: "logement" },
+  { label: "Carburant", category: "transport" },
+  { label: "Déjeuner", category: "alimentation" },
+  { label: "Loyer", category: "logement" },
+  { label: "Audrey", category: "autres" },
+];
+
+const JULY_TEST_DATA = [
+  { label: "Servante", amount: 40000, category: "autres", paid: true },
+  { label: "Poche", amount: 0, category: "autres", paid: false },
+  { label: "Internet (mois)", amount: 15000, category: "abonnements", paid: true },
+  { label: "Internet Dokui", amount: 15000, category: "abonnements", paid: true },
+  { label: "CIE", amount: 18000, category: "logement", paid: false },
+  { label: "Carburant", amount: 0, category: "transport", paid: false },
+  { label: "Déjeuner", amount: 5000, category: "alimentation", paid: true },
+  { label: "Loyer", amount: 135000, category: "logement", paid: true },
+  { label: "Audrey", amount: 30000, category: "autres", paid: true },
+];
+
+const MONTH_NAMES = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+
+function todayISO() {
+  const d = new Date();
+  const off = d.getTimezoneOffset();
+  const local = new Date(d.getTime() - off * 60000);
+  return local.toISOString().slice(0, 10);
+}
+function monthKey(dateStr) { return dateStr.slice(0, 7); }
+function formatMonthLabel(key) {
+  const [y, m] = key.split("-").map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+function formatAmount(n) { return Math.round(n).toLocaleString("fr-FR"); }
+function shiftMonth(key, delta) {
+  const [y, m] = key.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function catInfo(id) { return CATEGORIES.find((c) => c.id === id) || CATEGORIES[CATEGORIES.length - 1]; }
+function fixedAppliesToMonth(fx, key) {
+  if (key < fx.since) return false;
+  if (fx.until && key >= fx.until) return false;
+  return true;
+}
+
+function ExpenseJournal({ accessToken, onLogout }) {
+  const [expenses, setExpenses] = useState([]);
+  const [fixedExpenses, setFixedExpenses] = useState([]);
+  const [paidStatus, setPaidStatus] = useState({});
+  const [monthOverrides, setMonthOverrides] = useState({});
+  const [tab, setTab] = useState("today");
+  const [loaded, setLoaded] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("loading"); // loading | syncing | synced | offline | error
+  const fileIdRef = React.useRef(null);
+  const saveTimerRef = React.useRef(null);
+
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState(CATEGORIES[0].id);
+  const [note, setNote] = useState("");
+  const [date, setDate] = useState(todayISO());
+
+  const [fxLabel, setFxLabel] = useState("");
+  const [fxAmount, setFxAmount] = useState("");
+  const [fxCategory, setFxCategory] = useState(CATEGORIES[0].id);
+
+  const [summaryMonth, setSummaryMonth] = useState(monthKey(todayISO()));
+  const [fixedViewMonth, setFixedViewMonth] = useState(monthKey(todayISO()));
+  const currentMonth = monthKey(todayISO());
+
+  // Chargement initial : cache local d'abord (affichage immédiat), puis Google Drive (source de vérité)
+  useEffect(() => {
+    const cached = cache.get();
+    if (cached) {
+      setExpenses(cached.expenses || []);
+      setFixedExpenses(cached.fixedExpenses || []);
+      setPaidStatus(cached.paidStatus || {});
+      setMonthOverrides(cached.monthOverrides || {});
+    }
+    (async () => {
+      try {
+        let fid = localStorage.getItem("journal-depenses:file-id");
+        if (!fid) {
+          fid = await driveFindFileId(accessToken);
+          if (fid) localStorage.setItem("journal-depenses:file-id", fid);
+        }
+        if (fid) {
+          const remote = await driveReadFile(accessToken, fid);
+          fileIdRef.current = fid;
+          setExpenses(remote.expenses || []);
+          setFixedExpenses(remote.fixedExpenses || []);
+          setPaidStatus(remote.paidStatus || {});
+          setMonthOverrides(remote.monthOverrides || {});
+          cache.set(remote);
+        }
+        setSyncStatus("synced");
+      } catch (e) {
+        setSyncStatus("offline");
+      }
+      setLoaded(true);
+    })();
+  }, [accessToken]);
+
+  // Sauvegarde : cache local instantané + envoi (avec léger délai) vers Google Drive
+  useEffect(() => {
+    if (!loaded) return;
+    const payload = { expenses, fixedExpenses, paidStatus, monthOverrides };
+    cache.set(payload);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        setSyncStatus("syncing");
+        if (!fileIdRef.current) {
+          const id = await driveCreateFile(accessToken, payload);
+          fileIdRef.current = id;
+          localStorage.setItem("journal-depenses:file-id", id);
+        } else {
+          await driveUpdateFile(accessToken, fileIdRef.current, payload);
+        }
+        setSyncStatus("synced");
+      } catch (e) {
+        setSyncStatus("error");
+      }
+    }, 800);
+  }, [expenses, fixedExpenses, paidStatus, monthOverrides, loaded, accessToken]);
+
+  const persist = useCallback((next) => setExpenses(next), []);
+  const persistFixed = useCallback((next) => setFixedExpenses(next), []);
+  const persistPaid = useCallback((next) => setPaidStatus(next), []);
+  const persistOverrides = useCallback((next) => setMonthOverrides(next), []);
+
+  const addExpense = () => {
+    const val = parseFloat(amount.replace(",", "."));
+    if (!val || val <= 0 || !date) return;
+    const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, date, amount: val, category, note: note.trim() };
+    persist([entry, ...expenses].sort((a, b) => (a.date < b.date ? 1 : -1)));
+    setAmount(""); setNote("");
+  };
+  const deleteExpense = (id) => persist(expenses.filter((e) => e.id !== id));
+
+  const addFixed = () => {
+    const val = parseFloat(fxAmount.replace(",", "."));
+    if (!val || val <= 0 || !fxLabel.trim()) return;
+    const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: fxLabel.trim(), amount: val, category: fxCategory, since: currentMonth, until: null };
+    persistFixed([entry, ...fixedExpenses]);
+    setFxLabel(""); setFxAmount("");
+  };
+  const applySuggestion = (s) => { setFxLabel(s.label); setFxCategory(s.category); };
+  const stopFixed = (id) => persistFixed(fixedExpenses.map((f) => (f.id === id ? { ...f, until: currentMonth } : f)));
+  const resumeFixed = (id) => persistFixed(fixedExpenses.map((f) => (f.id === id ? { ...f, until: null } : f)));
+  const deleteFixed = (id) => persistFixed(fixedExpenses.filter((f) => f.id !== id));
+
+  const seedJulyTestData = () => {
+    const already = new Set(fixedExpenses.map((f) => f.label.toLowerCase()));
+    const toAdd = JULY_TEST_DATA.filter((d) => !already.has(d.label.toLowerCase()));
+    if (toAdd.length === 0) return;
+    const entries = toAdd.map((d) => ({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: d.label, amount: d.amount, category: d.category, since: currentMonth, until: null }));
+    persistFixed([...entries, ...fixedExpenses]);
+    const paidUpdates = {};
+    entries.forEach((e, i) => { if (toAdd[i].paid) paidUpdates[`${e.id}:${currentMonth}`] = true; });
+    persistPaid({ ...paidStatus, ...paidUpdates });
+  };
+
+  const togglePaid = (fixedId, month) => {
+    const key = `${fixedId}:${month}`;
+    persistPaid({ ...paidStatus, [key]: !paidStatus[key] });
+  };
+  const getMonthAmount = useCallback((f, key) => {
+    const ov = monthOverrides[`${f.id}:${key}`];
+    return ov !== undefined ? ov : f.amount;
+  }, [monthOverrides]);
+  const setMonthAmount = (fixedId, value, month) => {
+    const val = parseFloat(String(value).replace(",", "."));
+    const key = `${fixedId}:${month}`;
+    const next = { ...monthOverrides };
+    if (!value || isNaN(val)) delete next[key]; else next[key] = val;
+    persistOverrides(next);
+  };
+
+  const recent = useMemo(() => [...expenses].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 30), [expenses]);
+
+  const manualMonthTotals = useMemo(() => {
+    const map = {};
+    for (const e of expenses) { const k = monthKey(e.date); map[k] = (map[k] || 0) + e.amount; }
+    return map;
+  }, [expenses]);
+
+  const fixedMonthlyTotal = useMemo(() => (key) =>
+    fixedExpenses.filter((f) => fixedAppliesToMonth(f, key)).reduce((s, f) => {
+      const ov = monthOverrides[`${f.id}:${key}`];
+      return s + (ov !== undefined ? ov : f.amount);
+    }, 0), [fixedExpenses, monthOverrides]);
+
+  const monthTotal = useCallback((key) => (manualMonthTotals[key] || 0) + fixedMonthlyTotal(key), [manualMonthTotals, fixedMonthlyTotal]);
+
+  const categoryTotalsForMonth = useCallback((key) => {
+    const byCat = {};
+    for (const e of expenses) if (monthKey(e.date) === key) byCat[e.category] = (byCat[e.category] || 0) + e.amount;
+    for (const f of fixedExpenses) if (fixedAppliesToMonth(f, key)) {
+      const ov = monthOverrides[`${f.id}:${key}`];
+      byCat[f.category] = (byCat[f.category] || 0) + (ov !== undefined ? ov : f.amount);
+    }
+    return byCat;
+  }, [expenses, fixedExpenses, monthOverrides]);
+
+  const summaryData = useMemo(() => {
+    const byCat = categoryTotalsForMonth(summaryMonth);
+    const total = monthTotal(summaryMonth);
+    const sortedCats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const prevKey = shiftMonth(summaryMonth, -1);
+    const prevTotal = monthTotal(prevKey);
+    const delta = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
+    const manualCount = expenses.filter((e) => monthKey(e.date) === summaryMonth).length;
+    const fixedCount = fixedExpenses.filter((f) => fixedAppliesToMonth(f, summaryMonth)).length;
+    return { total, sortedCats, prevTotal, delta, manualCount, fixedCount, fixedTotal: fixedMonthlyTotal(summaryMonth) };
+  }, [summaryMonth, categoryTotalsForMonth, monthTotal, expenses, fixedExpenses, fixedMonthlyTotal]);
+
+  const historyData = useMemo(() => {
+    const keys = [];
+    for (let i = 11; i >= 0; i--) keys.push(shiftMonth(currentMonth, -i));
+    return keys.map((k) => ({ month: formatMonthLabel(k).slice(0, 3) + " " + k.slice(2, 4), total: Math.round(monthTotal(k)), key: k }));
+  }, [currentMonth, monthTotal]);
+
+  return (
+    <div style={{ background: "#10192B", minHeight: "100vh", fontFamily: "'Inter', sans-serif", color: "#EDE6D6" }}>
+      <div className="app-shell">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <SyncBadge status={syncStatus} />
+          <button onClick={onLogout} style={{ background: "none", border: "none", color: "#8C8577", fontSize: 12, cursor: "pointer", padding: 0 }}>
+            Déconnexion
+          </button>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 30, letterSpacing: "-0.01em", color: "#F7F2E7" }}>
+            Journal des dépenses
+          </div>
+          <div style={{ fontSize: 13, color: "#8C8577", marginTop: 2 }}>Un mouvement par jour, un compte à la fin du mois.</div>
+        </div>
+
+        <div className="ej-scroll" style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(237,230,214,0.15)", marginBottom: 20, overflowX: "auto" }}>
+          {[{ id: "today", label: "Aujourd'hui" }, { id: "fixed", label: "Fixes" }, { id: "summary", label: "Bilan" }, { id: "history", label: "Historique" }].map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", whiteSpace: "nowrap", color: tab === t.id ? "#C9A227" : "#8C8577", fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 14, padding: "8px 10px", cursor: "pointer", borderBottom: tab === t.id ? "2px solid #C9A227" : "2px solid transparent", marginBottom: -1 }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "today" && <TodayTab {...{ amount, setAmount, category, setCategory, note, setNote, date, setDate, addExpense, recent, deleteExpense }} />}
+        {tab === "fixed" && <FixedTab {...{ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, fxCategory, setFxCategory, addFixed, stopFixed, resumeFixed, deleteFixed, currentMonth, fixedViewMonth, setFixedViewMonth, seedJulyTestData, applySuggestion, paidStatus, togglePaid, getMonthAmount, setMonthAmount }} />}
+        {tab === "summary" && <SummaryTab summaryMonth={summaryMonth} setSummaryMonth={setSummaryMonth} data={summaryData} />}
+        {tab === "history" && <HistoryTab data={historyData} />}
+      </div>
+    </div>
+  );
+}
+
+function TodayTab({ amount, setAmount, category, setCategory, note, setNote, date, setDate, addExpense, recent, deleteExpense }) {
+  return (
+    <div>
+      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 18, marginBottom: 24, color: "#10192B" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 }}>
+          <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 26, fontWeight: 500, color: "#10192B" }} />
+          <span style={{ fontSize: 13, color: "#6B7280", fontWeight: 600 }}>FCFA</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#6B7280" }} />
+        </div>
+        <div className="ej-scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 12 }}>
+          {CATEGORIES.map((c) => {
+            const IconC = c.icon; const active = category === c.id;
+            return (
+              <button key={c.id} onClick={() => setCategory(c.id)} style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", padding: "6px 12px", borderRadius: 999, border: active ? `1.5px solid ${c.color}` : "1.5px solid transparent", background: active ? `${c.color}1A` : "rgba(16,25,43,0.05)", color: active ? c.color : "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                <IconC size={13} /> {c.label}
+              </button>
+            );
+          })}
+        </div>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (facultatif)" style={{ width: "100%", border: "none", borderTop: "1px solid rgba(16,25,43,0.1)", outline: "none", fontSize: 14, padding: "10px 0 12px", background: "transparent", color: "#10192B" }} />
+        <button onClick={addExpense} style={{ width: "100%", background: "#10192B", color: "#F7F2E7", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+          <Plus size={16} /> Ajouter la dépense
+        </button>
+      </div>
+
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Mouvements récents</div>
+      {recent.length === 0 ? (
+        <div style={{ fontSize: 13, color: "#6B7280", padding: "16px 0" }}>Rien d'enregistré pour l'instant. Ta première dépense apparaîtra ici.</div>
+      ) : (
+        <div>
+          {recent.map((e) => {
+            const c = catInfo(e.category); const IconC = c.icon;
+            return (
+              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)" }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: `${c.color}22`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <IconC size={14} color={c.color} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#F7F2E7" }}>{c.label}{e.note ? <span style={{ color: "#8C8577", fontWeight: 400 }}> · {e.note}</span> : null}</div>
+                  <div style={{ fontSize: 11, color: "#6B7280", fontFamily: "'IBM Plex Mono', monospace" }}>{e.date}</div>
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#E7B7B0" }}>−{formatAmount(e.amount)} FCFA</div>
+                <button onClick={() => deleteExpense(e.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Trash2 size={14} /></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, fxCategory, setFxCategory, addFixed, stopFixed, resumeFixed, deleteFixed, currentMonth, fixedViewMonth, setFixedViewMonth, seedJulyTestData, applySuggestion, paidStatus, togglePaid, getMonthAmount, setMonthAmount }) {
+  const active = fixedExpenses.filter((f) => !f.until || f.until > currentMonth);
+  const stopped = fixedExpenses.filter((f) => f.until && f.until <= currentMonth);
+  const monthlyTotal = active.reduce((s, f) => s + getMonthAmount(f, currentMonth), 0);
+  const viewActive = fixedExpenses.filter((f) => fixedAppliesToMonth(f, fixedViewMonth));
+  const existingLabels = new Set(fixedExpenses.map((f) => f.label.toLowerCase()));
+  const suggestions = FIXED_SUGGESTIONS.filter((s) => !existingLabels.has(s.label.toLowerCase()));
+  const paidCount = viewActive.filter((f) => paidStatus[`${f.id}:${fixedViewMonth}`]).length;
+
+  return (
+    <div>
+      <button onClick={seedJulyTestData} style={{ width: "100%", background: "rgba(201,162,39,0.15)", border: "1px dashed #C9A227", color: "#C9A227", borderRadius: 10, padding: "10px 0", fontSize: 12, fontWeight: 600, marginBottom: 16, cursor: "pointer" }}>
+        Fixe habituel
+      </button>
+
+      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 16, marginBottom: 20, color: "#10192B" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <button onClick={() => setFixedViewMonth(shiftMonth(fixedViewMonth, -1))} style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", padding: 4 }}><ChevronLeft size={16} /></button>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#10192B", textTransform: "capitalize" }}>{formatMonthLabel(fixedViewMonth)}</div>
+          <button onClick={() => setFixedViewMonth(shiftMonth(fixedViewMonth, 1))} style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", padding: 4 }}><ChevronRight size={16} /></button>
+        </div>
+        {fixedViewMonth !== currentMonth && (
+          <button onClick={() => setFixedViewMonth(currentMonth)} style={{ display: "block", margin: "0 auto 8px", background: "none", border: "none", color: "#C9A227", fontSize: 11, cursor: "pointer" }}>revenir à ce mois-ci</button>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6B7280" }}>{viewActive.length} dépense{viewActive.length > 1 ? "s" : ""} fixe{viewActive.length > 1 ? "s" : ""}</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280" }}>{paidCount}/{viewActive.length} réglées</div>
+        </div>
+        <div style={{ fontSize: 11, color: "#8C8577", marginBottom: 10 }}>Vérifie et ajuste le montant du mois, puis confirme.</div>
+        {viewActive.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#6B7280", padding: "8px 0" }}>Aucune dépense fixe active ce mois-là.</div>
+        ) : viewActive.map((f) => {
+          const key = `${f.id}:${fixedViewMonth}`;
+          const paid = !!paidStatus[key];
+          const monthVal = getMonthAmount(f, fixedViewMonth);
+          const isOverridden = monthVal !== f.amount;
+          return (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(16,25,43,0.08)" }}>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500 }}>{f.label}</div>
+              <input value={monthVal} onChange={(e) => setMonthAmount(f.id, e.target.value, fixedViewMonth)} inputMode="numeric" style={{ width: 64, textAlign: "right", border: "none", borderBottom: isOverridden ? "1px solid #C9A227" : "1px solid transparent", outline: "none", background: "transparent", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#10192B" }} />
+              <button onClick={() => togglePaid(f.id, fixedViewMonth)} style={{ border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontStyle: "italic", cursor: "pointer", color: paid ? "#FFFFFF" : "#8A5A00", background: paid ? "#7A9471" : "#F5C453", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                {paid ? <Check size={11} /> : null}{paid ? "ok" : "en attente"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 18, marginBottom: 20, color: "#10192B" }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6B7280", marginBottom: 10 }}>Nouvelle dépense fixe</div>
+        {suggestions.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 6 }}>Libellés habituels — touche pour préremplir</div>
+            <div className="ej-scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+              {suggestions.map((s) => (
+                <button key={s.label} onClick={() => applySuggestion(s)} style={{ whiteSpace: "nowrap", padding: "5px 10px", borderRadius: 999, border: "1px dashed rgba(16,25,43,0.3)", background: "transparent", color: "#10192B", fontSize: 12, cursor: "pointer" }}>+ {s.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <input value={fxLabel} onChange={(e) => setFxLabel(e.target.value)} placeholder="Libellé (ex. Loyer, Internet, CIE)" style={{ width: "100%", border: "none", borderBottom: "1px solid rgba(16,25,43,0.15)", outline: "none", fontSize: 14, padding: "8px 0", background: "transparent", color: "#10192B", marginBottom: 10 }} />
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
+          <input value={fxAmount} onChange={(e) => setFxAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 20, fontWeight: 500, color: "#10192B" }} />
+          <span style={{ fontSize: 11, color: "#6B7280" }}>FCFA / mois</span>
+        </div>
+        <div className="ej-scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
+          {CATEGORIES.map((c) => {
+            const IconC = c.icon; const isActive = fxCategory === c.id;
+            return (
+              <button key={c.id} onClick={() => setFxCategory(c.id)} style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", padding: "6px 12px", borderRadius: 999, border: isActive ? `1.5px solid ${c.color}` : "1.5px solid transparent", background: isActive ? `${c.color}1A` : "rgba(16,25,43,0.05)", color: isActive ? c.color : "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                <IconC size={13} /> {c.label}
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={addFixed} style={{ width: "100%", background: "#10192B", color: "#F7F2E7", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+          <Plus size={16} /> Ajouter en récurrent
+        </button>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", letterSpacing: "0.03em", textTransform: "uppercase" }}>Actives ({active.length})</div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#C9A227" }}>{formatAmount(monthlyTotal)} FCFA / mois</div>
+      </div>
+      {active.length === 0 ? (
+        <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 20 }}>Aucune dépense fixe pour l'instant — loyer, abonnements, aide à domicile…</div>
+      ) : (
+        <div style={{ marginBottom: 20 }}>
+          {active.map((f) => {
+            const c = catInfo(f.category); const IconC = c.icon;
+            return (
+              <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)" }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: `${c.color}22`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><IconC size={14} color={c.color} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#F7F2E7" }}>{f.label}</div>
+                  <div style={{ fontSize: 11, color: "#6B7280" }}>depuis {formatMonthLabel(f.since)}</div>
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#EDE6D6" }}>{formatAmount(f.amount)}</div>
+                <button onClick={() => stopFixed(f.id)} title="Arrêter" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Pause size={14} /></button>
+                <button onClick={() => deleteFixed(f.id)} title="Supprimer" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Trash2 size={14} /></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {stopped.length > 0 && (
+        <>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Arrêtées</div>
+          {stopped.map((f) => {
+            const c = catInfo(f.category); const IconC = c.icon;
+            return (
+              <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)", opacity: 0.6 }}>
+                <IconC size={14} color={c.color} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: "#F7F2E7" }}>{f.label}</div>
+                  <div style={{ fontSize: 11, color: "#6B7280" }}>{formatMonthLabel(f.since)} → {formatMonthLabel(f.until)}</div>
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#6B7280" }}>{formatAmount(f.amount)}</div>
+                <button onClick={() => resumeFixed(f.id)} title="Reprendre" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><RotateCcw size={14} /></button>
+                <button onClick={() => deleteFixed(f.id)} title="Supprimer" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Trash2 size={14} /></button>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SummaryTab({ summaryMonth, setSummaryMonth, data }) {
+  const { total, sortedCats, delta, manualCount, fixedCount, fixedTotal } = data;
+  const maxCat = sortedCats.length ? sortedCats[0][1] : 1;
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, -1))} style={{ background: "none", border: "none", color: "#8C8577", cursor: "pointer" }}><ChevronLeft size={18} /></button>
+        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 18, color: "#F7F2E7", textTransform: "capitalize" }}>{formatMonthLabel(summaryMonth)}</div>
+        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, 1))} style={{ background: "none", border: "none", color: "#8C8577", cursor: "pointer" }}><ChevronRight size={18} /></button>
+      </div>
+      <div style={{ background: "#F7F2E7", color: "#10192B", borderRadius: 4, padding: "22px 20px 18px", position: "relative", borderTop: "2px dashed rgba(16,25,43,0.25)", marginBottom: 24 }}>
+        <div style={{ position: "absolute", top: -8, left: 16, width: 16, height: 16, borderRadius: "50%", background: "#10192B" }} />
+        <div style={{ position: "absolute", top: -8, right: 16, width: 16, height: 16, borderRadius: "50%", background: "#10192B" }} />
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", marginBottom: 4 }}>
+          Total du mois · {manualCount} mouvement{manualCount > 1 ? "s" : ""}{fixedCount > 0 ? ` + ${fixedCount} fixe${fixedCount > 1 ? "s" : ""}` : ""}
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 34, fontWeight: 600, marginBottom: 4 }}>{formatAmount(total)} <span style={{ fontSize: 16 }}>FCFA</span></div>
+        {fixedTotal > 0 && <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8 }}>dont {formatAmount(fixedTotal)} FCFA de fixes</div>}
+        {delta !== null && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600, color: delta > 0 ? "#B5544A" : "#7A9471", marginTop: 4 }}>
+            {delta > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />} {Math.abs(delta).toFixed(1)}% vs mois précédent
+          </div>
+        )}
+        <div style={{ borderTop: "1px dashed rgba(16,25,43,0.2)", marginTop: 16, paddingTop: 14 }}>
+          {sortedCats.length === 0 ? <div style={{ fontSize: 13, color: "#6B7280" }}>Aucune dépense enregistrée ce mois-ci.</div> : sortedCats.map(([catId, val]) => {
+            const c = catInfo(catId); const IconC = c.icon; const pct = (val / maxCat) * 100;
+            return (
+              <div key={catId} style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 500 }}><IconC size={12} color={c.color} /> {c.label}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{formatAmount(val)} FCFA</span>
+                </div>
+                <div style={{ height: 5, borderRadius: 3, background: "rgba(16,25,43,0.08)", overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: c.color, borderRadius: 3 }} /></div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryTab({ data }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 12, letterSpacing: "0.03em", textTransform: "uppercase" }}>12 derniers mois</div>
+      {data.every((d) => d.total === 0) ? (
+        <div style={{ fontSize: 13, color: "#6B7280" }}>Pas encore assez de données pour comparer. Reviens dans quelques semaines.</div>
+      ) : (
+        <>
+          <div style={{ width: "100%", height: 220, marginBottom: 20 }}>
+            <ResponsiveContainer>
+              <BarChart data={data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(237,230,214,0.08)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: "#8C8577", fontSize: 11 }} axisLine={{ stroke: "rgba(237,230,214,0.15)" }} tickLine={false} />
+                <YAxis tick={{ fill: "#8C8577", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: "#F7F2E7", border: "none", borderRadius: 8, fontSize: 12 }} formatter={(v) => [`${formatAmount(v)} FCFA`, "Total"]} labelStyle={{ color: "#10192B", fontWeight: 600 }} />
+                <Bar dataKey="total" fill="#C9A227" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div>
+            {[...data].reverse().map((m, i, arr) => {
+              const prev = arr[i + 1];
+              const delta = prev && prev.total > 0 ? ((m.total - prev.total) / prev.total) * 100 : null;
+              return (
+                <div key={m.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)" }}>
+                  <span style={{ fontSize: 13, textTransform: "capitalize", color: "#F7F2E7" }}>{formatMonthLabel(m.key)}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#EDE6D6" }}>{formatAmount(m.total)} FCFA</span>
+                    {delta !== null && <span style={{ fontSize: 11, fontWeight: 600, color: delta > 0 ? "#B5544A" : "#7A9471", minWidth: 46, textAlign: "right" }}>{delta > 0 ? "+" : ""}{delta.toFixed(0)}%</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SyncBadge({ status }) {
+  const cfg = {
+    loading: { label: "Chargement…", color: "#8C8577" },
+    syncing: { label: "Synchro…", color: "#C9A227" },
+    synced: { label: "À jour", color: "#7A9471" },
+    offline: { label: "Hors ligne", color: "#B5544A" },
+    error: { label: "Échec synchro", color: "#B5544A" },
+  }[status] || { label: status, color: "#8C8577" };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: cfg.color }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />
+      {cfg.label}
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin, ready }) {
+  return (
+    <div style={{ background: "#10192B", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "'Inter', sans-serif" }}>
+      <div style={{ maxWidth: 360, width: "100%", textAlign: "center" }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 32, color: "#F7F2E7", marginBottom: 8 }}>
+          Journal des dépenses
+        </div>
+        <div style={{ fontSize: 14, color: "#8C8577", marginBottom: 32, lineHeight: 1.5 }}>
+          Connecte-toi pour accéder à tes données, synchronisées sur ton Google Drive.
+        </div>
+        <button
+          onClick={onLogin}
+          disabled={!ready}
+          style={{
+            width: "100%", background: "#F7F2E7", color: "#10192B", border: "none", borderRadius: 10,
+            padding: "14px 0", fontSize: 14, fontWeight: 600, cursor: ready ? "pointer" : "default",
+            opacity: ready ? 1 : 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h11.8c-.5 2.7-2.1 5-4.4 6.6v5.4h7.1c4.2-3.9 6.6-9.6 6.6-16.5z"/>
+            <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-7.1-5.4c-2 1.3-4.5 2.1-7.4 2.1-5.7 0-10.5-3.8-12.2-9H4.5v5.6C8.1 41 15.4 46 24 46z"/>
+            <path fill="#FBBC05" d="M11.8 28.4c-.4-1.3-.7-2.7-.7-4.1s.3-2.8.7-4.1v-5.6H4.5C3 17.6 2.2 20.7 2.2 24s.8 6.4 2.3 9.3z"/>
+            <path fill="#EA4335" d="M24 10.7c3.2 0 6.1 1.1 8.4 3.3l6.3-6.3C34.9 4.2 29.9 2 24 2 15.4 2 8.1 7 4.5 14.7l7.3 5.6c1.7-5.2 6.5-9.6 12.2-9.6z"/>
+          </svg>
+          {ready ? "Se connecter avec Google" : "Chargement…"}
+        </button>
+        <div style={{ fontSize: 11, color: "#6B7280", marginTop: 16, lineHeight: 1.5 }}>
+          Tes données restent dans ton propre Google Drive — cette page n'y a accès qu'au fichier qu'elle crée elle-même.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppRoot() {
+  const [screen, setScreen] = useState("login"); // login | app
+  const [accessToken, setAccessToken] = useState(null);
+  const [ready, setReady] = useState(false);
+  const tokenClientRef = React.useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const init = () => {
+      if (cancelled) return;
+      if (!window.google || !window.google.accounts) { setTimeout(init, 200); return; }
+      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/drive.file",
+        callback: (resp) => {
+          if (resp.error) return;
+          setAccessToken(resp.access_token);
+          setScreen("app");
+        },
+      });
+      setReady(true);
+    };
+    init();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleLogin = () => { if (tokenClientRef.current) tokenClientRef.current.requestAccessToken(); };
+  const handleLogout = () => {
+    if (window.google && accessToken) window.google.accounts.oauth2.revoke(accessToken, () => {});
+    setAccessToken(null);
+    setScreen("login");
+  };
+
+  if (screen === "login") return <LoginScreen onLogin={handleLogin} ready={ready} />;
+  return <ExpenseJournal accessToken={accessToken} onLogout={handleLogout} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<AppRoot />);
+</script>
+</body>
+</html>
