@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Dépenses" />
-<meta name="theme-color" content="#10192B" />
+<meta name="theme-color" content="#1B1E24" />
 <title>Journal des dépenses</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2310192B'/%3E%3Ctext x='50' y='68' font-size='55' text-anchor='middle' fill='%23C9A227' font-family='serif'%3E%E2%82%AB%3C/text%3E%3C/svg%3E" />
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%2310192B'/%3E%3Ctext x='50' y='68' font-size='55' text-anchor='middle' fill='%23C9A227' font-family='serif'%3E%E2%82%AB%3C/text%3E%3C/svg%3E" />
@@ -20,7 +20,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: #10192B; }
+  html, body { margin: 0; background: #1B1E24; }
   body { -webkit-tap-highlight-color: transparent; }
   .ej-scroll::-webkit-scrollbar { display: none; }
   .ej-scroll { -ms-overflow-style: none; scrollbar-width: none; }
@@ -32,7 +32,7 @@
       max-width: 640px;
       margin: 40px auto;
       padding: 36px 40px 48px;
-      background: #131f36;
+      background: #1F232B;
       border-radius: 20px;
       box-shadow: 0 30px 80px rgba(0,0,0,0.45);
       min-height: calc(100vh - 80px);
@@ -135,11 +135,11 @@ const RotateCcw = (p) => <Icon {...p} path={<><path d="M3 12a9 9 0 1 0 3-6.7L3 8
 const Check = (p) => <Icon {...p} path={<path d="M20 6 9 17l-5-5"/>} />;
 
 const CATEGORIES = [
-  { id: "alimentation", label: "Alimentation", color: "#B5544A", icon: ShoppingCart },
-  { id: "transport", label: "Transport", color: "#5B7DB1", icon: Car },
-  { id: "logement", label: "Logement", color: "#7A9471", icon: Home },
-  { id: "sante", label: "Santé", color: "#C9A227", icon: HeartPulse },
-  { id: "loisirs", label: "Loisirs", color: "#8B6F47", icon: Popcorn },
+  { id: "alimentation", label: "Alimentation", color: "#A47A72", icon: ShoppingCart },
+  { id: "transport", label: "Transport", color: "#7789A0", icon: Car },
+  { id: "logement", label: "Logement", color: "#869185", icon: Home },
+  { id: "sante", label: "Santé", color: "#9A9186", icon: HeartPulse },
+  { id: "loisirs", label: "Loisirs", color: "#8A7C68", icon: Popcorn },
   { id: "abonnements", label: "Abonnements", color: "#6B7280", icon: Repeat },
   { id: "autres", label: "Autres", color: "#9CA3AF", icon: MoreHorizontal },
 ];
@@ -353,8 +353,30 @@ function ExpenseJournal({ accessToken, onLogout }) {
     return byCat;
   }, [expenses, fixedExpenses, monthOverrides]);
 
+  const itemsByCategoryForMonth = useCallback(
+    (key) => {
+      const map = {};
+      for (const e of expenses) {
+        if (monthKey(e.date) !== key) continue;
+        if (!map[e.category]) map[e.category] = [];
+        map[e.category].push({ id: e.id, label: e.note ? e.note : "Dépense", date: e.date, amount: e.amount, fixed: false });
+      }
+      for (const f of fixedExpenses) {
+        if (!fixedAppliesToMonth(f, key)) continue;
+        const ov = monthOverrides[`${f.id}:${key}`];
+        const amt = ov !== undefined ? ov : f.amount;
+        if (!map[f.category]) map[f.category] = [];
+        map[f.category].push({ id: f.id, label: f.label, date: null, amount: amt, fixed: true });
+      }
+      Object.keys(map).forEach((cat) => map[cat].sort((a, b) => (a.date && b.date ? (a.date < b.date ? 1 : -1) : a.fixed ? -1 : 1)));
+      return map;
+    },
+    [expenses, fixedExpenses, monthOverrides]
+  );
+
   const summaryData = useMemo(() => {
     const byCat = categoryTotalsForMonth(summaryMonth);
+    const itemsByCat = itemsByCategoryForMonth(summaryMonth);
     const total = monthTotal(summaryMonth);
     const sortedCats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
     const prevKey = shiftMonth(summaryMonth, -1);
@@ -362,8 +384,8 @@ function ExpenseJournal({ accessToken, onLogout }) {
     const delta = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
     const manualCount = expenses.filter((e) => monthKey(e.date) === summaryMonth).length;
     const fixedCount = fixedExpenses.filter((f) => fixedAppliesToMonth(f, summaryMonth)).length;
-    return { total, sortedCats, prevTotal, delta, manualCount, fixedCount, fixedTotal: fixedMonthlyTotal(summaryMonth) };
-  }, [summaryMonth, categoryTotalsForMonth, monthTotal, expenses, fixedExpenses, fixedMonthlyTotal]);
+    return { total, sortedCats, itemsByCat, prevTotal, delta, manualCount, fixedCount, fixedTotal: fixedMonthlyTotal(summaryMonth) };
+  }, [summaryMonth, categoryTotalsForMonth, itemsByCategoryForMonth, monthTotal, expenses, fixedExpenses, fixedMonthlyTotal]);
 
   const historyData = useMemo(() => {
     const keys = [];
@@ -372,24 +394,24 @@ function ExpenseJournal({ accessToken, onLogout }) {
   }, [currentMonth, monthTotal]);
 
   return (
-    <div style={{ background: "#10192B", minHeight: "100vh", fontFamily: "'Inter', sans-serif", color: "#EDE6D6" }}>
+    <div style={{ background: "#1B1E24", minHeight: "100vh", fontFamily: "'Inter', sans-serif", color: "#E5E3DD" }}>
       <div className="app-shell">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
           <SyncBadge status={syncStatus} />
-          <button onClick={onLogout} style={{ background: "none", border: "none", color: "#8C8577", fontSize: 12, cursor: "pointer", padding: 0 }}>
+          <button onClick={onLogout} style={{ background: "none", border: "none", color: "#8B8985", fontSize: 12, cursor: "pointer", padding: 0 }}>
             Déconnexion
           </button>
         </div>
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 30, letterSpacing: "-0.01em", color: "#F7F2E7" }}>
+          <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 30, letterSpacing: "-0.01em", color: "#EDECE8" }}>
             Journal des dépenses
           </div>
-          <div style={{ fontSize: 13, color: "#8C8577", marginTop: 2 }}>Un mouvement par jour, un compte à la fin du mois.</div>
+          <div style={{ fontSize: 13, color: "#8B8985", marginTop: 2 }}>Un mouvement par jour, un compte à la fin du mois.</div>
         </div>
 
         <div className="ej-scroll" style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(237,230,214,0.15)", marginBottom: 20, overflowX: "auto" }}>
           {[{ id: "today", label: "Aujourd'hui" }, { id: "fixed", label: "Fixes" }, { id: "summary", label: "Bilan" }, { id: "history", label: "Historique" }].map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", whiteSpace: "nowrap", color: tab === t.id ? "#C9A227" : "#8C8577", fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 14, padding: "8px 10px", cursor: "pointer", borderBottom: tab === t.id ? "2px solid #C9A227" : "2px solid transparent", marginBottom: -1 }}>
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", whiteSpace: "nowrap", color: tab === t.id ? "#9A9186" : "#8B8985", fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 14, padding: "8px 10px", cursor: "pointer", borderBottom: tab === t.id ? "2px solid #9A9186" : "2px solid transparent", marginBottom: -1 }}>
               {t.label}
             </button>
           ))}
@@ -407,9 +429,9 @@ function ExpenseJournal({ accessToken, onLogout }) {
 function TodayTab({ amount, setAmount, category, setCategory, note, setNote, date, setDate, addExpense, recent, deleteExpense }) {
   return (
     <div>
-      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 18, marginBottom: 24, color: "#10192B" }}>
+      <div style={{ background: "#EDECE8", borderRadius: 14, padding: 18, marginBottom: 24, color: "#1B1E24" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 }}>
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 26, fontWeight: 500, color: "#10192B" }} />
+          <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 26, fontWeight: 500, color: "#1B1E24" }} />
           <span style={{ fontSize: 13, color: "#6B7280", fontWeight: 600 }}>FCFA</span>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#6B7280" }} />
         </div>
@@ -423,13 +445,13 @@ function TodayTab({ amount, setAmount, category, setCategory, note, setNote, dat
             );
           })}
         </div>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (facultatif)" style={{ width: "100%", border: "none", borderTop: "1px solid rgba(16,25,43,0.1)", outline: "none", fontSize: 14, padding: "10px 0 12px", background: "transparent", color: "#10192B" }} />
-        <button onClick={addExpense} style={{ width: "100%", background: "#10192B", color: "#F7F2E7", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (facultatif)" style={{ width: "100%", border: "none", borderTop: "1px solid rgba(16,25,43,0.1)", outline: "none", fontSize: 14, padding: "10px 0 12px", background: "transparent", color: "#1B1E24" }} />
+        <button onClick={addExpense} style={{ width: "100%", background: "#1B1E24", color: "#EDECE8", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
           <Plus size={16} /> Ajouter la dépense
         </button>
       </div>
 
-      <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Mouvements récents</div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#8B8985", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Mouvements récents</div>
       {recent.length === 0 ? (
         <div style={{ fontSize: 13, color: "#6B7280", padding: "16px 0" }}>Rien d'enregistré pour l'instant. Ta première dépense apparaîtra ici.</div>
       ) : (
@@ -442,10 +464,10 @@ function TodayTab({ amount, setAmount, category, setCategory, note, setNote, dat
                   <IconC size={14} color={c.color} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#F7F2E7" }}>{c.label}{e.note ? <span style={{ color: "#8C8577", fontWeight: 400 }}> · {e.note}</span> : null}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#EDECE8" }}>{c.label}{e.note ? <span style={{ color: "#8B8985", fontWeight: 400 }}> · {e.note}</span> : null}</div>
                   <div style={{ fontSize: 11, color: "#6B7280", fontFamily: "'IBM Plex Mono', monospace" }}>{e.date}</div>
                 </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#E7B7B0" }}>−{formatAmount(e.amount)} FCFA</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#C7ACA6" }}>−{formatAmount(e.amount)} FCFA</div>
                 <button onClick={() => deleteExpense(e.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Trash2 size={14} /></button>
               </div>
             );
@@ -467,24 +489,24 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
 
   return (
     <div>
-      <button onClick={seedJulyTestData} style={{ width: "100%", background: "rgba(201,162,39,0.15)", border: "1px dashed #C9A227", color: "#C9A227", borderRadius: 10, padding: "10px 0", fontSize: 12, fontWeight: 600, marginBottom: 16, cursor: "pointer" }}>
+      <button onClick={seedJulyTestData} style={{ width: "100%", background: "rgba(201,162,39,0.15)", border: "1px dashed #9A9186", color: "#9A9186", borderRadius: 10, padding: "10px 0", fontSize: 12, fontWeight: 600, marginBottom: 16, cursor: "pointer" }}>
         Fixe habituel
       </button>
 
-      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 16, marginBottom: 20, color: "#10192B" }}>
+      <div style={{ background: "#EDECE8", borderRadius: 14, padding: 16, marginBottom: 20, color: "#1B1E24" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
           <button onClick={() => setFixedViewMonth(shiftMonth(fixedViewMonth, -1))} style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", padding: 4 }}><ChevronLeft size={16} /></button>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#10192B", textTransform: "capitalize" }}>{formatMonthLabel(fixedViewMonth)}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1B1E24", textTransform: "capitalize" }}>{formatMonthLabel(fixedViewMonth)}</div>
           <button onClick={() => setFixedViewMonth(shiftMonth(fixedViewMonth, 1))} style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", padding: 4 }}><ChevronRight size={16} /></button>
         </div>
         {fixedViewMonth !== currentMonth && (
-          <button onClick={() => setFixedViewMonth(currentMonth)} style={{ display: "block", margin: "0 auto 8px", background: "none", border: "none", color: "#C9A227", fontSize: 11, cursor: "pointer" }}>revenir à ce mois-ci</button>
+          <button onClick={() => setFixedViewMonth(currentMonth)} style={{ display: "block", margin: "0 auto 8px", background: "none", border: "none", color: "#9A9186", fontSize: 11, cursor: "pointer" }}>revenir à ce mois-ci</button>
         )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
           <div style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6B7280" }}>{viewActive.length} dépense{viewActive.length > 1 ? "s" : ""} fixe{viewActive.length > 1 ? "s" : ""}</div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280" }}>{paidCount}/{viewActive.length} réglées</div>
         </div>
-        <div style={{ fontSize: 11, color: "#8C8577", marginBottom: 10 }}>Vérifie et ajuste le montant du mois, puis confirme.</div>
+        <div style={{ fontSize: 11, color: "#8B8985", marginBottom: 10 }}>Vérifie et ajuste le montant du mois, puis confirme.</div>
         {viewActive.length === 0 ? (
           <div style={{ fontSize: 13, color: "#6B7280", padding: "8px 0" }}>Aucune dépense fixe active ce mois-là.</div>
         ) : viewActive.map((f) => {
@@ -495,8 +517,8 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
           return (
             <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(16,25,43,0.08)" }}>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500 }}>{f.label}</div>
-              <input value={monthVal} onChange={(e) => setMonthAmount(f.id, e.target.value, fixedViewMonth)} inputMode="numeric" style={{ width: 64, textAlign: "right", border: "none", borderBottom: isOverridden ? "1px solid #C9A227" : "1px solid transparent", outline: "none", background: "transparent", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#10192B" }} />
-              <button onClick={() => togglePaid(f.id, fixedViewMonth)} style={{ border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontStyle: "italic", cursor: "pointer", color: paid ? "#FFFFFF" : "#8A5A00", background: paid ? "#7A9471" : "#F5C453", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              <input value={monthVal} onChange={(e) => setMonthAmount(f.id, e.target.value, fixedViewMonth)} inputMode="numeric" style={{ width: 64, textAlign: "right", border: "none", borderBottom: isOverridden ? "1px solid #9A9186" : "1px solid transparent", outline: "none", background: "transparent", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#1B1E24" }} />
+              <button onClick={() => togglePaid(f.id, fixedViewMonth)} style={{ border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontStyle: "italic", cursor: "pointer", color: paid ? "#FFFFFF" : "#6E6255", background: paid ? "#869185" : "#C7BB94", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                 {paid ? <Check size={11} /> : null}{paid ? "ok" : "en attente"}
               </button>
             </div>
@@ -504,21 +526,21 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
         })}
       </div>
 
-      <div style={{ background: "#F7F2E7", borderRadius: 14, padding: 18, marginBottom: 20, color: "#10192B" }}>
+      <div style={{ background: "#EDECE8", borderRadius: 14, padding: 18, marginBottom: 20, color: "#1B1E24" }}>
         <div style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6B7280", marginBottom: 10 }}>Nouvelle dépense fixe</div>
         {suggestions.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 6 }}>Libellés habituels — touche pour préremplir</div>
             <div className="ej-scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
               {suggestions.map((s) => (
-                <button key={s.label} onClick={() => applySuggestion(s)} style={{ whiteSpace: "nowrap", padding: "5px 10px", borderRadius: 999, border: "1px dashed rgba(16,25,43,0.3)", background: "transparent", color: "#10192B", fontSize: 12, cursor: "pointer" }}>+ {s.label}</button>
+                <button key={s.label} onClick={() => applySuggestion(s)} style={{ whiteSpace: "nowrap", padding: "5px 10px", borderRadius: 999, border: "1px dashed rgba(16,25,43,0.3)", background: "transparent", color: "#1B1E24", fontSize: 12, cursor: "pointer" }}>+ {s.label}</button>
               ))}
             </div>
           </div>
         )}
-        <input value={fxLabel} onChange={(e) => setFxLabel(e.target.value)} placeholder="Libellé (ex. Loyer, Internet, CIE)" style={{ width: "100%", border: "none", borderBottom: "1px solid rgba(16,25,43,0.15)", outline: "none", fontSize: 14, padding: "8px 0", background: "transparent", color: "#10192B", marginBottom: 10 }} />
+        <input value={fxLabel} onChange={(e) => setFxLabel(e.target.value)} placeholder="Libellé (ex. Loyer, Internet, CIE)" style={{ width: "100%", border: "none", borderBottom: "1px solid rgba(16,25,43,0.15)", outline: "none", fontSize: 14, padding: "8px 0", background: "transparent", color: "#1B1E24", marginBottom: 10 }} />
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
-          <input value={fxAmount} onChange={(e) => setFxAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 20, fontWeight: 500, color: "#10192B" }} />
+          <input value={fxAmount} onChange={(e) => setFxAmount(e.target.value)} placeholder="0" inputMode="numeric" style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 20, fontWeight: 500, color: "#1B1E24" }} />
           <span style={{ fontSize: 11, color: "#6B7280" }}>FCFA / mois</span>
         </div>
         <div className="ej-scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
@@ -531,14 +553,14 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
             );
           })}
         </div>
-        <button onClick={addFixed} style={{ width: "100%", background: "#10192B", color: "#F7F2E7", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+        <button onClick={addFixed} style={{ width: "100%", background: "#1B1E24", color: "#EDECE8", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
           <Plus size={16} /> Ajouter en récurrent
         </button>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", letterSpacing: "0.03em", textTransform: "uppercase" }}>Actives ({active.length})</div>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#C9A227" }}>{formatAmount(monthlyTotal)} FCFA / mois</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#8B8985", letterSpacing: "0.03em", textTransform: "uppercase" }}>Actives ({active.length})</div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#9A9186" }}>{formatAmount(monthlyTotal)} FCFA / mois</div>
       </div>
       {active.length === 0 ? (
         <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 20 }}>Aucune dépense fixe pour l'instant — loyer, abonnements, aide à domicile…</div>
@@ -550,10 +572,10 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
               <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)" }}>
                 <div style={{ width: 30, height: 30, borderRadius: 8, background: `${c.color}22`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><IconC size={14} color={c.color} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#F7F2E7" }}>{f.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#EDECE8" }}>{f.label}</div>
                   <div style={{ fontSize: 11, color: "#6B7280" }}>depuis {formatMonthLabel(f.since)}</div>
                 </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#EDE6D6" }}>{formatAmount(f.amount)}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#E5E3DD" }}>{formatAmount(f.amount)}</div>
                 <button onClick={() => stopFixed(f.id)} title="Arrêter" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Pause size={14} /></button>
                 <button onClick={() => deleteFixed(f.id)} title="Supprimer" style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4 }}><Trash2 size={14} /></button>
               </div>
@@ -563,14 +585,14 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
       )}
       {stopped.length > 0 && (
         <>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Arrêtées</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#8B8985", marginBottom: 8, letterSpacing: "0.03em", textTransform: "uppercase" }}>Arrêtées</div>
           {stopped.map((f) => {
             const c = catInfo(f.category); const IconC = c.icon;
             return (
               <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)", opacity: 0.6 }}>
                 <IconC size={14} color={c.color} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, color: "#F7F2E7" }}>{f.label}</div>
+                  <div style={{ fontSize: 13, color: "#EDECE8" }}>{f.label}</div>
                   <div style={{ fontSize: 11, color: "#6B7280" }}>{formatMonthLabel(f.since)} → {formatMonthLabel(f.until)}</div>
                 </div>
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#6B7280" }}>{formatAmount(f.amount)}</div>
@@ -586,31 +608,36 @@ function FixedTab({ fixedExpenses, fxLabel, setFxLabel, fxAmount, setFxAmount, f
 }
 
 function SummaryTab({ summaryMonth, setSummaryMonth, data }) {
-  const { total, sortedCats, delta, manualCount, fixedCount, fixedTotal } = data;
+  const { total, sortedCats, itemsByCat, delta, manualCount, fixedCount, fixedTotal } = data;
   const maxCat = sortedCats.length ? sortedCats[0][1] : 1;
+  const [expanded, setExpanded] = useState({});
+  const toggle = (catId) => setExpanded((prev) => ({ ...prev, [catId]: !prev[catId] }));
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, -1))} style={{ background: "none", border: "none", color: "#8C8577", cursor: "pointer" }}><ChevronLeft size={18} /></button>
-        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 18, color: "#F7F2E7", textTransform: "capitalize" }}>{formatMonthLabel(summaryMonth)}</div>
-        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, 1))} style={{ background: "none", border: "none", color: "#8C8577", cursor: "pointer" }}><ChevronRight size={18} /></button>
+        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, -1))} style={{ background: "none", border: "none", color: "#8B8985", cursor: "pointer" }}><ChevronLeft size={18} /></button>
+        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 18, color: "#EDECE8", textTransform: "capitalize" }}>{formatMonthLabel(summaryMonth)}</div>
+        <button onClick={() => setSummaryMonth(shiftMonth(summaryMonth, 1))} style={{ background: "none", border: "none", color: "#8B8985", cursor: "pointer" }}><ChevronRight size={18} /></button>
       </div>
-      <div style={{ background: "#F7F2E7", color: "#10192B", borderRadius: 4, padding: "22px 20px 18px", position: "relative", borderTop: "2px dashed rgba(16,25,43,0.25)", marginBottom: 24 }}>
-        <div style={{ position: "absolute", top: -8, left: 16, width: 16, height: 16, borderRadius: "50%", background: "#10192B" }} />
-        <div style={{ position: "absolute", top: -8, right: 16, width: 16, height: 16, borderRadius: "50%", background: "#10192B" }} />
+      <div style={{ background: "#EDECE8", color: "#1B1E24", borderRadius: 4, padding: "22px 20px 18px", position: "relative", borderTop: "2px dashed rgba(16,25,43,0.25)", marginBottom: 24 }}>
+        <div style={{ position: "absolute", top: -8, left: 16, width: 16, height: 16, borderRadius: "50%", background: "#1B1E24" }} />
+        <div style={{ position: "absolute", top: -8, right: 16, width: 16, height: 16, borderRadius: "50%", background: "#1B1E24" }} />
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", marginBottom: 4 }}>
           Total du mois · {manualCount} mouvement{manualCount > 1 ? "s" : ""}{fixedCount > 0 ? ` + ${fixedCount} fixe${fixedCount > 1 ? "s" : ""}` : ""}
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 34, fontWeight: 600, marginBottom: 4 }}>{formatAmount(total)} <span style={{ fontSize: 16 }}>FCFA</span></div>
         {fixedTotal > 0 && <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8 }}>dont {formatAmount(fixedTotal)} FCFA de fixes</div>}
         {delta !== null && (
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600, color: delta > 0 ? "#B5544A" : "#7A9471", marginTop: 4 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600, color: delta > 0 ? "#A47A72" : "#869185", marginTop: 4 }}>
             {delta > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />} {Math.abs(delta).toFixed(1)}% vs mois précédent
           </div>
         )}
         <div style={{ borderTop: "1px dashed rgba(16,25,43,0.2)", marginTop: 16, paddingTop: 14 }}>
           {sortedCats.length === 0 ? <div style={{ fontSize: 13, color: "#6B7280" }}>Aucune dépense enregistrée ce mois-ci.</div> : sortedCats.map(([catId, val]) => {
             const c = catInfo(catId); const IconC = c.icon; const pct = (val / maxCat) * 100;
+            const items = (itemsByCat && itemsByCat[catId]) || [];
+            const isOpen = !!expanded[catId];
             return (
               <div key={catId} style={{ marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
@@ -618,6 +645,29 @@ function SummaryTab({ summaryMonth, setSummaryMonth, data }) {
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{formatAmount(val)} FCFA</span>
                 </div>
                 <div style={{ height: 5, borderRadius: 3, background: "rgba(16,25,43,0.08)", overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: c.color, borderRadius: 3 }} /></div>
+                {items.length > 0 && (
+                  <button
+                    onClick={() => toggle(catId)}
+                    style={{ background: "none", border: "none", color: "#6B7280", fontSize: 11, cursor: "pointer", padding: "6px 0 0", display: "flex", alignItems: "center", gap: 3 }}
+                  >
+                    {isOpen ? <ChevronRight size={11} style={{ transform: "rotate(90deg)" }} /> : <ChevronRight size={11} />}
+                    {isOpen ? "Réduire" : `Détails (${items.length})`}
+                  </button>
+                )}
+                {isOpen && (
+                  <div style={{ marginTop: 6, paddingLeft: 4, borderLeft: "2px solid rgba(16,25,43,0.1)" }}>
+                    {items.map((it) => (
+                      <div key={it.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, padding: "4px 0 4px 10px", color: "#3A3F47" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                          {it.fixed && <span style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em", color: "#6B7280", border: "1px solid rgba(16,25,43,0.15)", borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>fixe</span>}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+                          {it.date && <span style={{ color: "#6B7280", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, flexShrink: 0 }}>{it.date}</span>}
+                        </span>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0, marginLeft: 8 }}>{formatAmount(it.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -630,7 +680,7 @@ function SummaryTab({ summaryMonth, setSummaryMonth, data }) {
 function HistoryTab({ data }) {
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: "#8C8577", marginBottom: 12, letterSpacing: "0.03em", textTransform: "uppercase" }}>12 derniers mois</div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#8B8985", marginBottom: 12, letterSpacing: "0.03em", textTransform: "uppercase" }}>12 derniers mois</div>
       {data.every((d) => d.total === 0) ? (
         <div style={{ fontSize: 13, color: "#6B7280" }}>Pas encore assez de données pour comparer. Reviens dans quelques semaines.</div>
       ) : (
@@ -639,10 +689,10 @@ function HistoryTab({ data }) {
             <ResponsiveContainer>
               <BarChart data={data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(237,230,214,0.08)" vertical={false} />
-                <XAxis dataKey="month" tick={{ fill: "#8C8577", fontSize: 11 }} axisLine={{ stroke: "rgba(237,230,214,0.15)" }} tickLine={false} />
-                <YAxis tick={{ fill: "#8C8577", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: "#F7F2E7", border: "none", borderRadius: 8, fontSize: 12 }} formatter={(v) => [`${formatAmount(v)} FCFA`, "Total"]} labelStyle={{ color: "#10192B", fontWeight: 600 }} />
-                <Bar dataKey="total" fill="#C9A227" radius={[4, 4, 0, 0]} />
+                <XAxis dataKey="month" tick={{ fill: "#8B8985", fontSize: 11 }} axisLine={{ stroke: "rgba(237,230,214,0.15)" }} tickLine={false} />
+                <YAxis tick={{ fill: "#8B8985", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: "#EDECE8", border: "none", borderRadius: 8, fontSize: 12 }} formatter={(v) => [`${formatAmount(v)} FCFA`, "Total"]} labelStyle={{ color: "#1B1E24", fontWeight: 600 }} />
+                <Bar dataKey="total" fill="#9A9186" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -652,10 +702,10 @@ function HistoryTab({ data }) {
               const delta = prev && prev.total > 0 ? ((m.total - prev.total) / prev.total) * 100 : null;
               return (
                 <div key={m.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(237,230,214,0.1)" }}>
-                  <span style={{ fontSize: 13, textTransform: "capitalize", color: "#F7F2E7" }}>{formatMonthLabel(m.key)}</span>
+                  <span style={{ fontSize: 13, textTransform: "capitalize", color: "#EDECE8" }}>{formatMonthLabel(m.key)}</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#EDE6D6" }}>{formatAmount(m.total)} FCFA</span>
-                    {delta !== null && <span style={{ fontSize: 11, fontWeight: 600, color: delta > 0 ? "#B5544A" : "#7A9471", minWidth: 46, textAlign: "right" }}>{delta > 0 ? "+" : ""}{delta.toFixed(0)}%</span>}
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#E5E3DD" }}>{formatAmount(m.total)} FCFA</span>
+                    {delta !== null && <span style={{ fontSize: 11, fontWeight: 600, color: delta > 0 ? "#A47A72" : "#869185", minWidth: 46, textAlign: "right" }}>{delta > 0 ? "+" : ""}{delta.toFixed(0)}%</span>}
                   </div>
                 </div>
               );
@@ -669,12 +719,12 @@ function HistoryTab({ data }) {
 
 function SyncBadge({ status }) {
   const cfg = {
-    loading: { label: "Chargement…", color: "#8C8577" },
-    syncing: { label: "Synchro…", color: "#C9A227" },
-    synced: { label: "À jour", color: "#7A9471" },
-    offline: { label: "Hors ligne", color: "#B5544A" },
-    error: { label: "Échec synchro", color: "#B5544A" },
-  }[status] || { label: status, color: "#8C8577" };
+    loading: { label: "Chargement…", color: "#8B8985" },
+    syncing: { label: "Synchro…", color: "#9A9186" },
+    synced: { label: "À jour", color: "#869185" },
+    offline: { label: "Hors ligne", color: "#A47A72" },
+    error: { label: "Échec synchro", color: "#A47A72" },
+  }[status] || { label: status, color: "#8B8985" };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: cfg.color }}>
       <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />
@@ -685,19 +735,19 @@ function SyncBadge({ status }) {
 
 function LoginScreen({ onLogin, ready }) {
   return (
-    <div style={{ background: "#10192B", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ background: "#1B1E24", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "'Inter', sans-serif" }}>
       <div style={{ maxWidth: 360, width: "100%", textAlign: "center" }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 32, color: "#F7F2E7", marginBottom: 8 }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 32, color: "#EDECE8", marginBottom: 8 }}>
           Journal des dépenses
         </div>
-        <div style={{ fontSize: 14, color: "#8C8577", marginBottom: 32, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 14, color: "#8B8985", marginBottom: 32, lineHeight: 1.5 }}>
           Connecte-toi pour accéder à tes données, synchronisées sur ton Google Drive.
         </div>
         <button
           onClick={onLogin}
           disabled={!ready}
           style={{
-            width: "100%", background: "#F7F2E7", color: "#10192B", border: "none", borderRadius: 10,
+            width: "100%", background: "#EDECE8", color: "#1B1E24", border: "none", borderRadius: 10,
             padding: "14px 0", fontSize: 14, fontWeight: 600, cursor: ready ? "pointer" : "default",
             opacity: ready ? 1 : 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           }}
